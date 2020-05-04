@@ -158,7 +158,7 @@ static void read8(void *const dst, const void *const src)
     *(uint8_t *)dst = *(const uint8_t *)src;
 }
 
-static size_t swap32(void *dst, const void *const src)
+static void swap32(void *dst, const void *const src)
 {
     *(uint8_t *)dst++ = *((const uint8_t *)src + 3);
     *(uint8_t *)dst++ = *((const uint8_t *)src + 2);
@@ -200,7 +200,7 @@ static void readle32(void *const dst, const void *const src)
     }
 }
 
-static size_t swap16(void *dst, const void *const src)
+static void swap16(void *dst, const void *const src)
 {
     *(uint8_t *)dst++ = *((const uint8_t *)src + 1);
     *(uint8_t *)dst = *(const uint8_t *)src;
@@ -257,7 +257,7 @@ enum serializer_err deserialize(const char *format,
         char c;
         size_t in_sz = 0, out_sz = 0;
 
-        while (c = *format)
+        while ((c = *format))
         {
             const enum token token = get_token(c, &state, &endianness);
 
@@ -274,7 +274,14 @@ enum serializer_err deserialize(const char *format,
                         [TOKEN_BE32BIT] = sizeof (uint32_t)
                     };
 
-                    const size_t st = sizes[token];
+                    static const size_t aligns[] =
+                    {
+                        [TOKEN_8BIT] = _Alignof (uint8_t),
+                        [TOKEN_LE16BIT] = _Alignof (uint16_t),
+                        [TOKEN_BE16BIT] = _Alignof (uint16_t),
+                        [TOKEN_LE32BIT] = _Alignof (uint32_t),
+                        [TOKEN_BE32BIT] = _Alignof (uint32_t)
+                    };
 
                     static void (*const read[])(void *dst, const void *src) =
                     {
@@ -285,7 +292,8 @@ enum serializer_err deserialize(const char *format,
                         [TOKEN_BE32BIT] = readbe32
                     };
 
-                    const size_t padding = out_sz % st;
+                    const size_t st = sizes[token];
+                    const size_t padding = (uintptr_t)((const uint8_t *)dst + out_sz) % aligns[token];
 
                     if (padding)
                     {
