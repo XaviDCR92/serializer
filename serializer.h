@@ -19,10 +19,6 @@
 
 #include <stddef.h>
 
-#if __STDC_VERSION__ < 199901L
-#error C99 support is mandatory for serializer
-#endif /* __STDC_VERSION < 199901L */
-
 #ifdef __cplusplus
 extern "C"
 {

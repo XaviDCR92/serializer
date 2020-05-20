@@ -20,6 +20,10 @@
 #include <string.h>
 #include <stdint.h>
 
+#if __STDC_VERSION__ < 201112L
+#error C11 support is mandatory for serializer
+#endif
+
 static bool little_endian(void)
 {
     return (const union {char c; int b;}){.c = 1}.b;
@@ -42,6 +46,8 @@ enum token
     TOKEN_BE16BIT,
     TOKEN_LE32BIT,
     TOKEN_BE32BIT,
+    TOKEN_LE64BIT,
+    TOKEN_BE64BIT,
     TOKEN_NOT_READY,
     TOKEN_ERROR
 };
@@ -134,6 +140,22 @@ static enum token get_multibyte(const char c, enum state *const state, enum endi
 
             break;
 
+        case '8':
+
+            switch (*endianness)
+            {
+                case LITTLE_ENDIAN:
+                    return TOKEN_LE64BIT;
+
+                case BIG_ENDIAN:
+                    return TOKEN_BE64BIT;
+
+                default:
+                    break;
+            }
+
+            break;
+
         default:
             break;
     }
@@ -153,46 +175,72 @@ static enum token get_token(const char c, enum state *const state, enum endianne
     return get[*state](c, state, endianness);
 }
 
-static void read8(void *const dst, const void *const src)
+static void read8(void *const dst, const void *const src, const size_t sz)
 {
     *(uint8_t *)dst = *(const uint8_t *)src;
 }
 
-static void swap32(void *dst, const void *const src)
+static void swap64(uint8_t *dst, const uint8_t *const src)
 {
-    *(uint8_t *)dst++ = *((const uint8_t *)src + 3);
-    *(uint8_t *)dst++ = *((const uint8_t *)src + 2);
-    *(uint8_t *)dst++ = *((const uint8_t *)src + 1);
-    *(uint8_t *)dst = *(const uint8_t *)src;
+    *dst++ = *(src + 7);
+    *dst++ = *(src + 6);
+    *dst++ = *(src + 5);
+    *dst++ = *(src + 4);
+    *dst++ = *(src + 3);
+    *dst++ = *(src + 2);
+    *dst++ = *(src + 1);
+    *dst = *src;
 }
 
-static void readbe32(void *const dst, const void *const src)
+static void readbe64(void *const dst, const void *const src, const size_t sz)
 {
-    enum
+    if (little_endian())
     {
-        SZ = sizeof (uint32_t)
-    };
+        swap64(dst, src);
+    }
+    else
+    {
+        memmove(dst, src, sz);
+    }
+}
 
+static void readle64(void *const dst, const void *const src, const size_t sz)
+{
+    if (little_endian())
+    {
+        memmove(dst, src, sz);
+    }
+    else
+    {
+        swap64(dst, src);
+    }
+}
+
+static void swap32(uint8_t *dst, const uint8_t *const src)
+{
+    *dst++ = *(src + 3);
+    *dst++ = *(src + 2);
+    *dst++ = *(src + 1);
+    *dst = *src;
+}
+
+static void readbe32(void *const dst, const void *const src, const size_t sz)
+{
     if (little_endian())
     {
         swap32(dst, src);
     }
     else
     {
-        memmove(dst, src, SZ);
+        memmove(dst, src, sz);
     }
 }
 
-static void readle32(void *const dst, const void *const src)
+static void readle32(void *const dst, const void *const src, const size_t sz)
 {
-    enum
-    {
-        SZ = sizeof (uint32_t)
-    };
-
     if (little_endian())
     {
-        memmove(dst, src, SZ);
+        memmove(dst, src, sz);
     }
     else
     {
@@ -200,39 +248,29 @@ static void readle32(void *const dst, const void *const src)
     }
 }
 
-static void swap16(void *dst, const void *const src)
+static void swap16(uint8_t *dst, const uint8_t *const src)
 {
-    *(uint8_t *)dst++ = *((const uint8_t *)src + 1);
-    *(uint8_t *)dst = *(const uint8_t *)src;
+    *dst++ = *(src + 1);
+    *dst = *src;
 }
 
-static void readbe16(void *const dst, const void *const src)
+static void readbe16(void *const dst, const void *const src, const size_t sz)
 {
-    enum
-    {
-        SZ = sizeof (uint16_t)
-    };
-
     if (little_endian())
     {
         swap16(dst, src);
     }
     else
     {
-        memmove(dst, src, SZ);
+        memmove(dst, src, sz);
     }
 }
 
-static void readle16(void *const dst, const void *const src)
+static void readle16(void *const dst, const void *const src, const size_t sz)
 {
-    enum
-    {
-        SZ = sizeof (uint16_t)
-    };
-
     if (little_endian())
     {
-        memmove(dst, src, SZ);
+        memmove(dst, src, sz);
     }
     else
     {
@@ -271,7 +309,9 @@ enum serializer_err deserialize(const char *format,
                         [TOKEN_LE16BIT] = sizeof (uint16_t),
                         [TOKEN_BE16BIT] = sizeof (uint16_t),
                         [TOKEN_LE32BIT] = sizeof (uint32_t),
-                        [TOKEN_BE32BIT] = sizeof (uint32_t)
+                        [TOKEN_BE32BIT] = sizeof (uint32_t),
+                        [TOKEN_LE64BIT] = sizeof (uint64_t),
+                        [TOKEN_BE64BIT] = sizeof (uint64_t)
                     };
 
                     static const size_t aligns[] =
@@ -280,16 +320,20 @@ enum serializer_err deserialize(const char *format,
                         [TOKEN_LE16BIT] = _Alignof (uint16_t),
                         [TOKEN_BE16BIT] = _Alignof (uint16_t),
                         [TOKEN_LE32BIT] = _Alignof (uint32_t),
-                        [TOKEN_BE32BIT] = _Alignof (uint32_t)
+                        [TOKEN_BE32BIT] = _Alignof (uint32_t),
+                        [TOKEN_LE64BIT] = _Alignof (uint64_t),
+                        [TOKEN_BE64BIT] = _Alignof (uint64_t)
                     };
 
-                    static void (*const read[])(void *dst, const void *src) =
+                    static void (*const read[])(void *dst, const void *src, size_t sz) =
                     {
                         [TOKEN_8BIT] = read8,
                         [TOKEN_LE16BIT] = readle16,
                         [TOKEN_BE16BIT] = readbe16,
                         [TOKEN_LE32BIT] = readle32,
-                        [TOKEN_BE32BIT] = readbe32
+                        [TOKEN_BE32BIT] = readbe32,
+                        [TOKEN_LE64BIT] = readle64,
+                        [TOKEN_BE64BIT] = readbe64
                     };
 
                     const size_t st = sizes[token];
@@ -304,7 +348,7 @@ enum serializer_err deserialize(const char *format,
                         return SERIALIZER_ERR_IN_OVERFLOW;
                     else if (out_sz + st <= sz)
                     {
-                        read[token]((uint8_t *)dst + out_sz, (const uint8_t *)src + in_sz);
+                        read[token]((uint8_t *)dst + out_sz, (const uint8_t *)src + in_sz, st);
                         in_sz += st;
                         out_sz += st;
                         state = 0;
